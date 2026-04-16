@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>e meter</title>
+
+  <style>
+    body {
+      background: #111;
+      color: #ddd;
+      font-family: monospace;
+      text-align: center;
+    }
+
+    #meter {
+      width: 320px;
+      height: 180px;
+      margin: 40px auto;
+      position: relative;
+    }
+
+    #needle {
+      width: 2px;
+      height: 130px;
+      background: red;
+      position: absolute;
+      left: 50%;
+      bottom: 20px;
+      transform-origin: bottom center;
+    }
+
+    .controls {
+      margin-top: 20px;
+    }
+
+    label {
+      display: block;
+      margin: 10px;
+    }
+
+    /* ── BLE ── */
+    #ble {
+      margin: 12px auto;
+    }
+
+    #ble-btn {
+      background: none;
+      border: none;
+      color: #888;
+      font-family: monospace;
+      font-size: 1em;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    #ble-btn:hover:not(:disabled) {
+      color: #ddd;
+    }
+
+    #ble-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    #ble-status {
+      color: #555;
+    }
+
+    #ble-status.connected {
+      color: #4c4;
+    }
+
+    #ble-status.scanning {
+      color: #cc4;
+    }
+
+    #ble-status.error {
+      color: #c44;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="meter">
+    <div id="needle"></div>
+  </div>
+
+  <div class="controls">
+
+    <label>
+      Tone Arm (scroll)
+      <br>
+      <input id="ta" type="range" min="-1" max="1" step="0.01" value="0">
+    </label>
+
+    <label>
+      Sensitivity (zoom)
+      <br>
+      <input id="sens" type="range" min="0.1" max="10" step="0.1" value="2">
+    </label>
+
+  </div>
+
+  <div>µS: <span id="us">—</span></div>
+
+  <div id="ble">
+    <button id="ble-btn">⬡ connect</button>
+    &nbsp;
+    <span id="ble-status">disconnected</span>
+  </div>
+
+  <svg id="poly" viewBox="0 0 320 80" preserveAspectRatio="none"
+    style="display:block; width:320px; height:80px; margin:12px auto;"></svg>
+
+  <script>
+    // ── UUIDs (match animated meter / ESP32 firmware) ──
+    const BLE_SERVICE_UUID = "454d4554-0000-1000-8000-00805f9b34fb";
+    const BLE_CHAR_UUID = "454d4554-4552-4c45-8d41-52454144494e";
+
+    const needle = document.getElementById("needle");
+
+    let toneArm = 0;
+    let sensitivity = 2;
+
+    document.getElementById("ta").oninput = e => { toneArm = parseFloat(e.target.value); };
+    document.getElementById("sens").oninput = e => { sensitivity = parseFloat(e.target.value); };
+
+    let baseline = null;
+    let smooth = null;
+    const SMOOTH = 0.1;
+
+    function updateNeedle(uS) {
+      if (smooth === null) smooth = uS;
+      if (baseline === null) baseline = uS;
+
+      smooth = SMOOTH * uS + (1 - SMOOTH) * smooth;
+      baseline = 0.001 * smooth + 0.999 * baseline;
+
+      let signal = smooth - baseline;
+      let drive = signal * sensitivity;
+      let final = Math.max(-1, Math.min(1, -drive + toneArm));
+      let angle = -90 + (final + 1) * 90;
+
+      needle.style.transform = `rotate(${angle}deg)`;
+    }
+
+    // ── Polygram ──
+    const polySvg = document.getElementById("poly");
+    const polyPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    polyPath.setAttribute("fill", "none");
+    polyPath.setAttribute("stroke", "red");
+    polyPath.setAttribute("stroke-width", "1.5");
+    polyPath.setAttribute("stroke-linecap", "round");
+    polyPath.setAttribute("stroke-linejoin", "round");
+    polySvg.appendChild(polyPath);
+
+    let polyData = [];
+    const WINDOW_MS = 30000;
+
+    function updatePolygram(uS) {
+      const now = Date.now();
+      polyData.push({ t: now, uS });
+      polyData = polyData.filter(p => now - p.t <= WINDOW_MS);
+
+      const vals = polyData.map(p => p.uS);
+      const lo = Math.min(...vals), hi = Math.max(...vals);
+      const pad = Math.max((hi - lo) * 0.2, 2);
+      const min = lo - pad, range = (hi + pad - lo + pad) || 1;
+
+      const W = 320, H = 80;
+      let d = "";
+      polyData.forEach((p, i) => {
+        const x = W * (1 - (now - p.t) / WINDOW_MS);
+        const y = H * (1 - (p.uS - min) / range);
+        d += (i === 0 ? `M${x.toFixed(1)},${y.toFixed(1)}` : `L${x.toFixed(1)},${y.toFixed(1)}`);
+      });
+      polyPath.setAttribute("d", d);
+    }
+
+    function handleFrame(f) {
+      const uS = f.smooth_uS ?? f.uS;
+      if (uS == null) return;
+      updateNeedle(uS);
+      updatePolygram(uS);
+      document.getElementById("us").textContent = uS.toFixed(2);
+    }
+
+    // ── BLE ──
+    const bleBtn = document.getElementById("ble-btn");
+    const bleStatus = document.getElementById("ble-status");
+    let bleDevice = null;
+    let bleChar = null;
+
+    function setBleStatus(text, cls) {
+      bleStatus.textContent = text;
+      bleStatus.className = cls || "";
+    }
+
+    async function bleConnect() {
+      if (!navigator.bluetooth) {
+        setBleStatus("no web bluetooth", "error");
+        return;
+      }
+
+      if (bleDevice && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+        return;
+      }
+
+      bleBtn.disabled = true;
+      setBleStatus("scanning…", "scanning");
+
+      try {
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [BLE_SERVICE_UUID] }]
+        });
+
+        bleDevice.addEventListener("gattserverdisconnected", () => {
+          setBleStatus("disconnected", "");
+          bleBtn.textContent = "⬡ connect";
+          bleBtn.disabled = false;
+          bleChar = null;
+        });
+
+        setBleStatus("connecting…", "scanning");
+        const server = await bleDevice.gatt.connect();
+        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+        bleChar = await service.getCharacteristic(BLE_CHAR_UUID);
+
+        await bleChar.startNotifications();
+        bleChar.addEventListener("characteristicvaluechanged", e => {
+          try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
+        });
+
+        setBleStatus("● connected", "connected");
+        bleBtn.textContent = "⬡ disconnect";
+        bleBtn.disabled = false;
+
+      } catch (err) {
+        setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
+        bleBtn.textContent = "⬡ connect";
+        bleBtn.disabled = false;
+      }
+    }
+
+    bleBtn.addEventListener("click", bleConnect);
+  </script>
+
+</body>
+
+</html>
