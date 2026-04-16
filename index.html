@@ -78,6 +78,37 @@
     #ble-status.error {
       color: #c44;
     }
+
+    /* ── residual alert ── */
+    #residual-display {
+      font-size: 11px;
+      color: #555;
+      margin: 4px auto;
+      height: 16px;
+      transition: color 0.1s;
+    }
+
+    #residual-display.alert-fall {
+      color: #f44;
+    }
+
+    #residual-display.alert-rise {
+      color: #4af;
+    }
+
+    #lobf-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #555;
+      cursor: pointer;
+      margin: 4px auto;
+    }
+
+    #lobf-label input {
+      cursor: pointer;
+    }
   </style>
 </head>
 
@@ -105,6 +136,12 @@
 
   <div>µS: <span id="us">—</span></div>
 
+  <div id="residual-display"></div>
+
+  <label id="lobf-label">
+    <input type="checkbox" id="lobf-check"> trend line
+  </label>
+
   <div id="ble">
     <button id="ble-btn">⬡ connect</button>
     &nbsp;
@@ -117,66 +154,163 @@
   <script>
     // ── UUIDs (match animated meter / ESP32 firmware) ──
     const BLE_SERVICE_UUID = "454d4554-0000-1000-8000-00805f9b34fb";
-    const BLE_CHAR_UUID = "454d4554-4552-4c45-8d41-52454144494e";
+    const BLE_CHAR_UUID    = "454d4554-4552-4c45-8d41-52454144494e";
 
     const needle = document.getElementById("needle");
 
-    let toneArm = 0;
+    let toneArm   = 0;
     let sensitivity = 2;
 
-    document.getElementById("ta").oninput = e => { toneArm = parseFloat(e.target.value); };
-    document.getElementById("sens").oninput = e => { sensitivity = parseFloat(e.target.value); };
+    document.getElementById("ta").oninput   = e => { toneArm      = parseFloat(e.target.value); };
+    document.getElementById("sens").oninput = e => { sensitivity  = parseFloat(e.target.value); };
 
     let baseline = null;
-    let smooth = null;
+    let smooth   = null;
     const SMOOTH = 0.1;
 
     function updateNeedle(uS) {
-      if (smooth === null) smooth = uS;
+      if (smooth   === null) smooth   = uS;
       if (baseline === null) baseline = uS;
 
-      smooth = SMOOTH * uS + (1 - SMOOTH) * smooth;
-      baseline = 0.001 * smooth + 0.999 * baseline;
+      smooth   = SMOOTH * uS + (1 - SMOOTH) * smooth;
+      baseline = 0.001  * smooth + 0.999 * baseline;
 
       let signal = smooth - baseline;
-      let drive = signal * sensitivity;
-      let final = Math.max(-1, Math.min(1, -drive + toneArm));
-      let angle = -90 + (final + 1) * 90;
+      let drive  = signal * sensitivity;
+      let final  = Math.max(-1, Math.min(1, -drive + toneArm));
+      let angle  = -90 + (final + 1) * 90;
 
       needle.style.transform = `rotate(${angle}deg)`;
     }
 
     // ── Polygram ──
-    const polySvg = document.getElementById("poly");
+    const polySvg  = document.getElementById("poly");
+
+    // signal path (red — existing)
     const polyPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    polyPath.setAttribute("fill", "none");
-    polyPath.setAttribute("stroke", "red");
-    polyPath.setAttribute("stroke-width", "1.5");
-    polyPath.setAttribute("stroke-linecap", "round");
-    polyPath.setAttribute("stroke-linejoin", "round");
+    polyPath.setAttribute("fill",             "none");
+    polyPath.setAttribute("stroke",           "red");
+    polyPath.setAttribute("stroke-width",     "1.5");
+    polyPath.setAttribute("stroke-linecap",   "round");
+    polyPath.setAttribute("stroke-linejoin",  "round");
     polySvg.appendChild(polyPath);
 
-    let polyData = [];
-    const WINDOW_MS = 30000;
+    // trend line path (dim yellow — new)
+    const trendPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    trendPath.setAttribute("fill",           "none");
+    trendPath.setAttribute("stroke",         "#aa8800");
+    trendPath.setAttribute("stroke-width",   "1");
+    trendPath.setAttribute("stroke-dasharray", "3 3");
+    trendPath.setAttribute("opacity",        "0.7");
+    trendPath.setAttribute("d",              "");
+    polySvg.appendChild(trendPath);
+
+    let polyData       = [];
+    const WINDOW_MS    = 30000;
+
+    // ── line-of-best-fit config ──
+    const LOBF_WINDOW_MS  = 1000;   // how far back to regress (tunable)
+    const RESIDUAL_THRESH = 0.12;   // µS — alert threshold (tunable)
+
+    let showLobf = false;
+    document.getElementById("lobf-check").onchange = e => {
+      showLobf = e.target.checked;
+      if (!showLobf) {
+        trendPath.setAttribute("d", "");
+        clearResidual();
+      }
+    };
+
+    // ── linear regression over an array of {x, y} ──
+    // returns { slope, intercept } in the same units as input
+    function linReg(pts) {
+      const n = pts.length;
+      if (n < 2) return null;
+      let sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (const p of pts) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; }
+      const denom = n * sxx - sx * sx;
+      if (Math.abs(denom) < 1e-12) return null;
+      const slope     = (n * sxy - sx * sy) / denom;
+      const intercept = (sy - slope * sx) / n;
+      return { slope, intercept };
+    }
+
+    const residualEl = document.getElementById("residual-display");
+    let   alertTimer = null;
+
+    function clearResidual() {
+      residualEl.textContent = "";
+      residualEl.className   = "";
+    }
+
+    function flashResidual(residual) {
+      const sign    = residual < 0 ? "▼" : "▲";
+      const cls     = residual < 0 ? "alert-fall" : "alert-rise";
+      residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} µS`;
+      residualEl.className   = cls;
+      clearTimeout(alertTimer);
+      // fade back after 2 s of no new alert
+      alertTimer = setTimeout(clearResidual, 2000);
+    }
 
     function updatePolygram(uS) {
       const now = Date.now();
       polyData.push({ t: now, uS });
       polyData = polyData.filter(p => now - p.t <= WINDOW_MS);
 
-      const vals = polyData.map(p => p.uS);
-      const lo = Math.min(...vals), hi = Math.max(...vals);
-      const pad = Math.max((hi - lo) * 0.2, 2);
-      const min = lo - pad, range = (hi + pad - lo + pad) || 1;
+      const vals  = polyData.map(p => p.uS);
+      const lo    = Math.min(...vals), hi = Math.max(...vals);
+      const pad   = Math.max((hi - lo) * 0.2, 2);
+      const min   = lo - pad, range = (hi + pad - lo + pad) || 1;
 
       const W = 320, H = 80;
+
+      // helper: data-space uS → SVG y
+      const toY = v => H * (1 - (v - min) / range);
+      // helper: data-space t  → SVG x
+      const toX = t => W * (1 - (now - t) / WINDOW_MS);
+
+      // ── signal path (unchanged) ──
       let d = "";
       polyData.forEach((p, i) => {
-        const x = W * (1 - (now - p.t) / WINDOW_MS);
-        const y = H * (1 - (p.uS - min) / range);
+        const x = toX(p.t);
+        const y = toY(p.uS);
         d += (i === 0 ? `M${x.toFixed(1)},${y.toFixed(1)}` : `L${x.toFixed(1)},${y.toFixed(1)}`);
       });
       polyPath.setAttribute("d", d);
+
+      // ── trend line + residual ──
+      if (!showLobf) return;
+
+      const lobfCutoff = now - LOBF_WINDOW_MS;
+      const lobfPts    = polyData
+        .filter(p => p.t >= lobfCutoff)
+        .map(p => ({ x: p.t - lobfCutoff, y: p.uS }));   // x = ms offset from window start
+
+      const reg = linReg(lobfPts);
+      if (!reg) return;
+
+      // draw trend line across the full polygram window
+      // — project the regression from its own window onto the display window
+      // left edge of display = t - WINDOW_MS  →  offset from lobfCutoff
+      const leftOffset  = now - WINDOW_MS - lobfCutoff;   // may be negative
+      const rightOffset = now             - lobfCutoff;
+
+      const yLeft  = reg.slope * leftOffset  + reg.intercept;
+      const yRight = reg.slope * rightOffset + reg.intercept;
+
+      const x0 = toX(now - WINDOW_MS), y0 = toY(yLeft);
+      const x1 = toX(now),             y1 = toY(yRight);
+
+      trendPath.setAttribute("d", `M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)}`);
+
+      // ── residual: predicted value right now vs actual ──
+      const predicted = reg.slope * rightOffset + reg.intercept;
+      const residual  = uS - predicted;   // negative = fell below trend = classic read
+
+      if (Math.abs(residual) >= RESIDUAL_THRESH) {
+        flashResidual(residual);
+      }
     }
 
     function handleFrame(f) {
@@ -188,14 +322,14 @@
     }
 
     // ── BLE ──
-    const bleBtn = document.getElementById("ble-btn");
+    const bleBtn    = document.getElementById("ble-btn");
     const bleStatus = document.getElementById("ble-status");
-    let bleDevice = null;
-    let bleChar = null;
+    let bleDevice   = null;
+    let bleChar     = null;
 
     function setBleStatus(text, cls) {
       bleStatus.textContent = text;
-      bleStatus.className = cls || "";
+      bleStatus.className   = cls || "";
     }
 
     async function bleConnect() {
@@ -220,14 +354,14 @@
         bleDevice.addEventListener("gattserverdisconnected", () => {
           setBleStatus("disconnected", "");
           bleBtn.textContent = "⬡ connect";
-          bleBtn.disabled = false;
-          bleChar = null;
+          bleBtn.disabled    = false;
+          bleChar            = null;
         });
 
         setBleStatus("connecting…", "scanning");
-        const server = await bleDevice.gatt.connect();
+        const server  = await bleDevice.gatt.connect();
         const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-        bleChar = await service.getCharacteristic(BLE_CHAR_UUID);
+        bleChar        = await service.getCharacteristic(BLE_CHAR_UUID);
 
         await bleChar.startNotifications();
         bleChar.addEventListener("characteristicvaluechanged", e => {
@@ -236,12 +370,12 @@
 
         setBleStatus("● connected", "connected");
         bleBtn.textContent = "⬡ disconnect";
-        bleBtn.disabled = false;
+        bleBtn.disabled    = false;
 
       } catch (err) {
         setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
         bleBtn.textContent = "⬡ connect";
-        bleBtn.disabled = false;
+        bleBtn.disabled    = false;
       }
     }
 
