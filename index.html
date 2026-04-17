@@ -209,8 +209,8 @@
     const WINDOW_MS    = 30000;
 
     // ── line-of-best-fit config ──
-    const LOBF_WINDOW_MS  = 1000;   // how far back to regress (tunable)
-    const RESIDUAL_THRESH = 0.12;   // µS — alert threshold (tunable)
+    const LOBF_WINDOW_MS  = 2000;   // how far back to regress (tunable)
+    const RESIDUAL_THRESH = 0.1;   // µS — alert threshold (tunable)
 
     let showLobf = false;
     document.getElementById("lobf-check").onchange = e => {
@@ -244,9 +244,9 @@
     }
 
     function flashResidual(residual) {
-      const sign    = residual < 0 ? "▼" : "▲";
+      const sign    = residual < 0 ? "\u25bc" : "\u25b2";
       const cls     = residual < 0 ? "alert-fall" : "alert-rise";
-      residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} µS`;
+      residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} \u00b5S`;
       residualEl.className   = cls;
       clearTimeout(alertTimer);
       // fade back after 2 s of no new alert
@@ -322,64 +322,64 @@
     }
 
     // ── BLE ──
-    const bleBtn    = document.getElementById("ble-btn");
-    const bleStatus = document.getElementById("ble-status");
-    let bleDevice   = null;
-    let bleChar     = null;
+      const bleBtn    = document.getElementById("ble-btn");
+      const bleStatus = document.getElementById("ble-status");
+      let bleDevice   = null;
+      let bleChar     = null;
 
-    function setBleStatus(text, cls) {
-      bleStatus.textContent = text;
-      bleStatus.className   = cls || "";
-    }
-
-    async function bleConnect() {
-      if (!navigator.bluetooth) {
-        setBleStatus("no web bluetooth", "error");
-        return;
+      function setBleStatus(text, cls) {
+        bleStatus.textContent = text;
+        bleStatus.className   = cls || "";
       }
 
-      if (bleDevice && bleDevice.gatt.connected) {
-        bleDevice.gatt.disconnect();
-        return;
+      async function bleConnect() {
+        if (!navigator.bluetooth) {
+          setBleStatus("no web bluetooth", "error");
+          return;
+        }
+
+        if (bleDevice && bleDevice.gatt.connected) {
+          bleDevice.gatt.disconnect();
+          return;
+        }
+
+        bleBtn.disabled = true;
+        setBleStatus("scanning\u2026", "scanning");
+
+        try {
+          bleDevice = await navigator.bluetooth.requestDevice({
+            filters: [{ services: [BLE_SERVICE_UUID] }]
+          });
+
+          bleDevice.addEventListener("gattserverdisconnected", () => {
+            setBleStatus("disconnected", "");
+            bleBtn.textContent  = "\u2b21 connect";
+            bleBtn.disabled     = false;
+            bleChar             = null;
+          });
+
+          setBleStatus("connecting\u2026", "scanning");
+          const server  = await bleDevice.gatt.connect();
+          const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+          bleChar       = await service.getCharacteristic(BLE_CHAR_UUID);
+
+          await bleChar.startNotifications();
+          bleChar.addEventListener("characteristicvaluechanged", e => {
+            try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
+          });
+
+          setBleStatus("\u25cf connected", "connected");
+          bleBtn.textContent  = "\u2b21 disconnect";
+          bleBtn.disabled     = false;
+
+        } catch (err) {
+          setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
+          bleBtn.textContent  = "\u2b21 connect";
+          bleBtn.disabled     = false;
+        }
       }
 
-      bleBtn.disabled = true;
-      setBleStatus("scanning…", "scanning");
-
-      try {
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ services: [BLE_SERVICE_UUID] }]
-        });
-
-        bleDevice.addEventListener("gattserverdisconnected", () => {
-          setBleStatus("disconnected", "");
-          bleBtn.textContent = "⬡ connect";
-          bleBtn.disabled    = false;
-          bleChar            = null;
-        });
-
-        setBleStatus("connecting…", "scanning");
-        const server  = await bleDevice.gatt.connect();
-        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-        bleChar        = await service.getCharacteristic(BLE_CHAR_UUID);
-
-        await bleChar.startNotifications();
-        bleChar.addEventListener("characteristicvaluechanged", e => {
-          try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
-        });
-
-        setBleStatus("● connected", "connected");
-        bleBtn.textContent = "⬡ disconnect";
-        bleBtn.disabled    = false;
-
-      } catch (err) {
-        setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
-        bleBtn.textContent = "⬡ connect";
-        bleBtn.disabled    = false;
-      }
-    }
-
-    bleBtn.addEventListener("click", bleConnect);
+      bleBtn.addEventListener("click", bleConnect);
   </script>
 
 </body>
