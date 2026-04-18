@@ -148,8 +148,8 @@
     <span id="ble-status">disconnected</span>
   </div>
 
-  <svg id="poly" viewBox="0 0 320 80" preserveAspectRatio="none"
-    style="display:block; width:320px; height:80px; margin:12px auto;"></svg>
+  <canvas id="poly" width="320" height="80"
+    style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
 
   <script>
     // ── UUIDs (match animated meter / ESP32 firmware) ──
@@ -183,46 +183,26 @@
       needle.style.transform = `rotate(${angle}deg)`;
     }
 
-    // ── Polygram ──
-    const polySvg  = document.getElementById("poly");
+    // ── Polygram (canvas) ──
+    const polyCanvas = document.getElementById("poly");
+    const ctx        = polyCanvas.getContext("2d");
+    const W = 320, H = 80;
 
-    // signal path (red — existing)
-    const polyPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    polyPath.setAttribute("fill",             "none");
-    polyPath.setAttribute("stroke",           "red");
-    polyPath.setAttribute("stroke-width",     "1.5");
-    polyPath.setAttribute("stroke-linecap",   "round");
-    polyPath.setAttribute("stroke-linejoin",  "round");
-    polySvg.appendChild(polyPath);
-
-    // trend line path (dim yellow — new)
-    const trendPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    trendPath.setAttribute("fill",           "none");
-    trendPath.setAttribute("stroke",         "#aa8800");
-    trendPath.setAttribute("stroke-width",   "1");
-    trendPath.setAttribute("stroke-dasharray", "3 3");
-    trendPath.setAttribute("opacity",        "0.7");
-    trendPath.setAttribute("d",              "");
-    polySvg.appendChild(trendPath);
-
-    let polyData       = [];
-    const WINDOW_MS    = 30000;
+    let polyData    = [];          // { t, uS }
+    let polyMin     = Infinity;    // running min — updated incrementally
+    let polyMax     = -Infinity;   // running max
+    const WINDOW_MS = 30000;
 
     // ── line-of-best-fit config ──
-    const LOBF_WINDOW_MS  = 2000;   // how far back to regress (tunable)
-    const RESIDUAL_THRESH = 0.1;   // µS — alert threshold (tunable)
+    const LOBF_WINDOW_MS  = 1200;
+    const RESIDUAL_THRESH = 0.08;
 
     let showLobf = false;
     document.getElementById("lobf-check").onchange = e => {
       showLobf = e.target.checked;
-      if (!showLobf) {
-        trendPath.setAttribute("d", "");
-        clearResidual();
-      }
+      if (!showLobf) clearResidual();
     };
 
-    // ── linear regression over an array of {x, y} ──
-    // returns { slope, intercept } in the same units as input
     function linReg(pts) {
       const n = pts.length;
       if (n < 2) return null;
@@ -244,74 +224,111 @@
     }
 
     function flashResidual(residual) {
-      const sign    = residual < 0 ? "\u25bc" : "\u25b2";
-      const cls     = residual < 0 ? "alert-fall" : "alert-rise";
+      const sign = residual < 0 ? "\u25bc" : "\u25b2";
+      const cls  = residual < 0 ? "alert-fall" : "alert-rise";
       residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} \u00b5S`;
       residualEl.className   = cls;
       clearTimeout(alertTimer);
-      // fade back after 2 s of no new alert
       alertTimer = setTimeout(clearResidual, 2000);
     }
 
+    // ── LOBF residual check throttled to ~4 hz ──
+    let lastLobfCheck = 0;
+    const LOBF_INTERVAL = 250;
+
     function updatePolygram(uS) {
       const now = Date.now();
+
+      // push new point
       polyData.push({ t: now, uS });
-      polyData = polyData.filter(p => now - p.t <= WINDOW_MS);
 
-      const vals  = polyData.map(p => p.uS);
-      const lo    = Math.min(...vals), hi = Math.max(...vals);
-      const pad   = Math.max((hi - lo) * 0.2, 2);
-      const min   = lo - pad, range = (hi + pad - lo + pad) || 1;
+      // prune old points from the front — no filter() allocation
+      const cutoff = now - WINDOW_MS;
+      let pruneCount = 0;
+      while (pruneCount < polyData.length && polyData[pruneCount].t < cutoff) pruneCount++;
+      if (pruneCount > 0) polyData.splice(0, pruneCount);
 
-      const W = 320, H = 80;
+      // incremental min/max — full rescan only when old points were pruned
+      if (pruneCount > 0) {
+        polyMin = Infinity; polyMax = -Infinity;
+        for (const p of polyData) {
+          if (p.uS < polyMin) polyMin = p.uS;
+          if (p.uS > polyMax) polyMax = p.uS;
+        }
+      } else {
+        if (uS < polyMin) polyMin = uS;
+        if (uS > polyMax) polyMax = uS;
+      }
 
-      // helper: data-space uS → SVG y
-      const toY = v => H * (1 - (v - min) / range);
-      // helper: data-space t  → SVG x
+      // LOBF residual check (throttled)
+      if (showLobf && now - lastLobfCheck >= LOBF_INTERVAL) {
+        lastLobfCheck = now;
+        const lobfCutoff = now - LOBF_WINDOW_MS;
+        const lobfPts = [];
+        for (const p of polyData) {
+          if (p.t >= lobfCutoff) lobfPts.push({ x: p.t - lobfCutoff, y: p.uS });
+        }
+        const reg = linReg(lobfPts);
+        if (reg) {
+          const residual = uS - (reg.slope * (now - lobfCutoff) + reg.intercept);
+          if (Math.abs(residual) >= RESIDUAL_THRESH) flashResidual(residual);
+        }
+      }
+    }
+
+    // ── canvas render loop — rAF, independent of BLE rate ──
+    function renderPolygram() {
+      requestAnimationFrame(renderPolygram);
+      ctx.clearRect(0, 0, W, H);
+      if (polyData.length < 2) return;
+
+      const now   = Date.now();
+      const pad   = Math.max((polyMax - polyMin) * 0.2, 2);
+      const lo    = polyMin - pad;
+      const range = (polyMax + pad - lo) || 1;
+
+      const toY = v => H * (1 - (v - lo) / range);
       const toX = t => W * (1 - (now - t) / WINDOW_MS);
 
-      // ── signal path (unchanged) ──
-      let d = "";
-      polyData.forEach((p, i) => {
-        const x = toX(p.t);
-        const y = toY(p.uS);
-        d += (i === 0 ? `M${x.toFixed(1)},${y.toFixed(1)}` : `L${x.toFixed(1)},${y.toFixed(1)}`);
-      });
-      polyPath.setAttribute("d", d);
+      // signal path
+      ctx.beginPath();
+      ctx.strokeStyle = "red";
+      ctx.lineWidth   = 1.5;
+      ctx.lineJoin    = "round";
+      ctx.lineCap     = "round";
+      for (let i = 0; i < polyData.length; i++) {
+        const x = toX(polyData[i].t);
+        const y = toY(polyData[i].uS);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
 
-      // ── trend line + residual ──
+      // trend line
       if (!showLobf) return;
-
       const lobfCutoff = now - LOBF_WINDOW_MS;
-      const lobfPts    = polyData
-        .filter(p => p.t >= lobfCutoff)
-        .map(p => ({ x: p.t - lobfCutoff, y: p.uS }));   // x = ms offset from window start
-
+      const lobfPts = [];
+      for (const p of polyData) {
+        if (p.t >= lobfCutoff) lobfPts.push({ x: p.t - lobfCutoff, y: p.uS });
+      }
       const reg = linReg(lobfPts);
       if (!reg) return;
 
-      // draw trend line across the full polygram window
-      // — project the regression from its own window onto the display window
-      // left edge of display = t - WINDOW_MS  →  offset from lobfCutoff
-      const leftOffset  = now - WINDOW_MS - lobfCutoff;   // may be negative
-      const rightOffset = now             - lobfCutoff;
+      const leftOffset  = now - WINDOW_MS - lobfCutoff;
+      const rightOffset = now - lobfCutoff;
 
-      const yLeft  = reg.slope * leftOffset  + reg.intercept;
-      const yRight = reg.slope * rightOffset + reg.intercept;
-
-      const x0 = toX(now - WINDOW_MS), y0 = toY(yLeft);
-      const x1 = toX(now),             y1 = toY(yRight);
-
-      trendPath.setAttribute("d", `M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)}`);
-
-      // ── residual: predicted value right now vs actual ──
-      const predicted = reg.slope * rightOffset + reg.intercept;
-      const residual  = uS - predicted;   // negative = fell below trend = classic read
-
-      if (Math.abs(residual) >= RESIDUAL_THRESH) {
-        flashResidual(residual);
-      }
+      ctx.beginPath();
+      ctx.strokeStyle = "#aa8800";
+      ctx.lineWidth   = 1;
+      ctx.globalAlpha = 0.7;
+      ctx.setLineDash([3, 3]);
+      ctx.moveTo(toX(now - WINDOW_MS), toY(reg.slope * leftOffset  + reg.intercept));
+      ctx.lineTo(toX(now),             toY(reg.slope * rightOffset + reg.intercept));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
+
+    renderPolygram(); // kick off rAF loop
 
     function handleFrame(f) {
       const uS = f.smooth_uS ?? f.uS;
