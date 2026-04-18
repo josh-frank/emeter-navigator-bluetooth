@@ -2,7 +2,6 @@
 <html>
 
 <head>
-  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>e meter</title>
 
@@ -15,15 +14,15 @@
     }
 
     #meter {
-      width: 640px;
-      height: 360px;
+      width: 320px;
+      height: 180px;
       margin: 40px auto;
       position: relative;
     }
 
     #needle {
       width: 2px;
-      height: 260px;
+      height: 130px;
       background: red;
       position: absolute;
       left: 50%;
@@ -195,8 +194,8 @@
     const WINDOW_MS = 30000;
 
     // ── line-of-best-fit config ──
-    const LOBF_WINDOW_MS  = 1200;
-    const RESIDUAL_THRESH = 0.08;
+    const LOBF_WINDOW_MS  = 2000;
+    const RESIDUAL_THRESH = 0.1;
 
     let showLobf = false;
     document.getElementById("lobf-check").onchange = e => {
@@ -350,6 +349,49 @@
         bleStatus.className   = cls || "";
       }
 
+      // ── attach notifications on a live server handle ──
+      async function attachNotifications(server) {
+        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+        bleChar       = await service.getCharacteristic(BLE_CHAR_UUID);
+        await bleChar.startNotifications();
+        bleChar.addEventListener("characteristicvaluechanged", e => {
+          try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
+        });
+      }
+
+      // ── reconnect loop — retries up to 3x on unexpected disconnect ──
+      let intentionalDisconnect = false;
+
+      async function handleDisconnect() {
+        bleChar = null;
+        if (intentionalDisconnect) {
+          setBleStatus("disconnected", "");
+          bleBtn.textContent = "⬡ connect";
+          bleBtn.disabled    = false;
+          return;
+        }
+
+        for (let i = 1; i <= 3; i++) {
+          setBleStatus(`reconnecting (${i}/3)…`, "scanning");
+          bleBtn.textContent = "⬡ disconnect";
+          bleBtn.disabled    = true;
+          await new Promise(r => setTimeout(r, 1000));
+          try {
+            const server = await bleDevice.gatt.connect();
+            await attachNotifications(server);
+            setBleStatus("● connected", "connected");
+            bleBtn.textContent = "⬡ disconnect";
+            bleBtn.disabled    = false;
+            return;
+          } catch (_) { }
+        }
+
+        // all retries exhausted
+        setBleStatus("disconnected", "");
+        bleBtn.textContent = "⬡ connect";
+        bleBtn.disabled    = false;
+      }
+
       async function bleConnect() {
         if (!navigator.bluetooth) {
           setBleStatus("no web bluetooth", "error");
@@ -357,43 +399,34 @@
         }
 
         if (bleDevice && bleDevice.gatt.connected) {
+          intentionalDisconnect = true;
           bleDevice.gatt.disconnect();
           return;
         }
 
         bleBtn.disabled = true;
-        setBleStatus("scanning\u2026", "scanning");
+        setBleStatus("scanning…", "scanning");
 
         try {
           bleDevice = await navigator.bluetooth.requestDevice({
             filters: [{ services: [BLE_SERVICE_UUID] }]
           });
 
-          bleDevice.addEventListener("gattserverdisconnected", () => {
-            setBleStatus("disconnected", "");
-            bleBtn.textContent  = "\u2b21 connect";
-            bleBtn.disabled     = false;
-            bleChar             = null;
-          });
+          intentionalDisconnect = false;
+          bleDevice.addEventListener("gattserverdisconnected", handleDisconnect);
 
-          setBleStatus("connecting\u2026", "scanning");
-          const server  = await bleDevice.gatt.connect();
-          const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-          bleChar       = await service.getCharacteristic(BLE_CHAR_UUID);
+          setBleStatus("connecting…", "scanning");
+          const server = await bleDevice.gatt.connect();
+          await attachNotifications(server);
 
-          await bleChar.startNotifications();
-          bleChar.addEventListener("characteristicvaluechanged", e => {
-            try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
-          });
-
-          setBleStatus("\u25cf connected", "connected");
-          bleBtn.textContent  = "\u2b21 disconnect";
-          bleBtn.disabled     = false;
+          setBleStatus("● connected", "connected");
+          bleBtn.textContent = "⬡ disconnect";
+          bleBtn.disabled    = false;
 
         } catch (err) {
           setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
-          bleBtn.textContent  = "\u2b21 connect";
-          bleBtn.disabled     = false;
+          bleBtn.textContent = "⬡ connect";
+          bleBtn.disabled    = false;
         }
       }
 
