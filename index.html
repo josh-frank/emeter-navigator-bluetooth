@@ -201,23 +201,17 @@
     let showLobf = false;
     document.getElementById("lobf-check").onchange = e => {
       showLobf = e.target.checked;
-      if (!showLobf) clearResidual();
+      if (!showLobf) {
+        clearResidual();
+      } else {
+        // reset accumulators so stale data doesn't seed the regression
+        reg_sx = 0; reg_sy = 0; reg_sxx = 0; reg_sxy = 0; reg_n = 0;
+        lobfData = [];
+      }
     };
 
-    function linReg(pts) {
-      const n = pts.length;
-      if (n < 2) return null;
-      let sx = 0, sy = 0, sxx = 0, sxy = 0;
-      for (const p of pts) { sx += p.x; sy += p.y; sxx += p.x * p.x; sxy += p.x * p.y; }
-      const denom = n * sxx - sx * sx;
-      if (Math.abs(denom) < 1e-12) return null;
-      const slope     = (n * sxy - sx * sy) / denom;
-      const intercept = (sy - slope * sx) / n;
-      return { slope, intercept };
-    }
-
     const residualEl = document.getElementById("residual-display");
-    let   alertTimer = null;
+    let   alertTimer  = null;
 
     function clearResidual() {
       residualEl.textContent = "";
@@ -225,31 +219,51 @@
     }
 
     function flashResidual(residual) {
-      const sign = residual < 0 ? "\u25bc" : "\u25b2";
+      const sign = residual < 0 ? "▼" : "▲";
       const cls  = residual < 0 ? "alert-fall" : "alert-rise";
-      residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} \u00b5S`;
+      residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} µS`;
       residualEl.className   = cls;
       clearTimeout(alertTimer);
       alertTimer = setTimeout(clearResidual, 2000);
     }
 
-    // ── LOBF residual check throttled to ~4 hz ──
-    let lastLobfCheck = 0;
-    const LOBF_INTERVAL = 250;
+    // ── Online incremental regression over a sliding time window ──
+    // Maintains sx, sy, sxx, sxy, n as running sums.
+    // x = timestamp (ms), y = µS value.
+    // Adding or removing a point is O(1) — no loops, no allocations.
+    let reg_sx = 0, reg_sy = 0, reg_sxx = 0, reg_sxy = 0, reg_n = 0;
+
+    function regAdd(t, y) {
+      reg_sx += t; reg_sy += y; reg_sxx += t * t; reg_sxy += t * y; reg_n++;
+    }
+    function regRemove(t, y) {
+      reg_sx -= t; reg_sy -= y; reg_sxx -= t * t; reg_sxy -= t * y; reg_n--;
+    }
+    function regResult() {
+      if (reg_n < 2) return null;
+      const denom = reg_n * reg_sxx - reg_sx * reg_sx;
+      if (Math.abs(denom) < 1e-6) return null;
+      const slope     = (reg_n * reg_sxy - reg_sx * reg_sy) / denom;
+      const intercept = (reg_sy - slope * reg_sx) / reg_n;
+      return { slope, intercept };
+    }
+
+    // lobfData mirrors the LOBF_WINDOW_MS slice — separate from polyData
+    let lobfData = [];   // { t, uS } — points currently in the regression
 
     function updatePolygram(uS) {
-      const now = Date.now();
+      const now    = Date.now();
+      const cutoff = now - WINDOW_MS;
 
-      // push new point
+      // ── push new point into display buffer ──
       polyData.push({ t: now, uS });
 
-      // prune old points from the front — no filter() allocation
-      const cutoff = now - WINDOW_MS;
+      // prune display buffer from front
       let pruneCount = 0;
       while (pruneCount < polyData.length && polyData[pruneCount].t < cutoff) pruneCount++;
       if (pruneCount > 0) polyData.splice(0, pruneCount);
 
-      // incremental min/max — full rescan only when old points were pruned
+      // incremental min/max — rescan only when points were pruned
       if (pruneCount > 0) {
         polyMin = Infinity; polyMax = -Infinity;
         for (const p of polyData) {
@@ -261,21 +275,26 @@
         if (uS > polyMax) polyMax = uS;
       }
 
-      // LOBF residual check (throttled)
-      if (showLobf && now - lastLobfCheck >= LOBF_INTERVAL) {
-        lastLobfCheck = now;
-        const lobfCutoff = now - LOBF_WINDOW_MS;
-        const lobfPts = [];
-        for (const p of polyData) {
-          if (p.t >= lobfCutoff) lobfPts.push({ x: p.t - lobfCutoff, y: p.uS });
-        }
-        const reg = linReg(lobfPts);
-        if (reg) {
-          const residual = uS - (reg.slope * (now - lobfCutoff) + reg.intercept);
-          if (Math.abs(residual) >= RESIDUAL_THRESH) flashResidual(residual);
-        }
+      if (!showLobf) return;
+
+      // ── add new point to regression ──
+      lobfData.push({ t: now, uS });
+      regAdd(now, uS);
+
+      // ── evict points outside LOBF window — O(1) amortised ──
+      const lobfCutoff = now - LOBF_WINDOW_MS;
+      while (lobfData.length && lobfData[0].t < lobfCutoff) {
+        const p = lobfData.shift();
+        regRemove(p.t, p.uS);
+      }
+
+      // ── residual: actual vs predicted at t=now ──
+      const reg = regResult();
+      if (reg && Math.abs(uS - (reg.slope * now + reg.intercept)) >= RESIDUAL_THRESH) {
+        flashResidual(uS - (reg.slope * now + reg.intercept));
       }
     }
+
 
     // ── canvas render loop — rAF, independent of BLE rate ──
     function renderPolygram() {
@@ -304,26 +323,21 @@
       }
       ctx.stroke();
 
-      // trend line
+      // trend line — slope/intercept already maintained by online regression
       if (!showLobf) return;
-      const lobfCutoff = now - LOBF_WINDOW_MS;
-      const lobfPts = [];
-      for (const p of polyData) {
-        if (p.t >= lobfCutoff) lobfPts.push({ x: p.t - lobfCutoff, y: p.uS });
-      }
-      const reg = linReg(lobfPts);
+      const reg = regResult();
       if (!reg) return;
 
-      const leftOffset  = now - WINDOW_MS - lobfCutoff;
-      const rightOffset = now - lobfCutoff;
+      const leftOffset  = now - WINDOW_MS;
+      const rightOffset = now;
 
       ctx.beginPath();
       ctx.strokeStyle = "#aa8800";
       ctx.lineWidth   = 1;
       ctx.globalAlpha = 0.7;
       ctx.setLineDash([3, 3]);
-      ctx.moveTo(toX(now - WINDOW_MS), toY(reg.slope * leftOffset  + reg.intercept));
-      ctx.lineTo(toX(now),             toY(reg.slope * rightOffset + reg.intercept));
+      ctx.moveTo(toX(leftOffset),  toY(reg.slope * leftOffset  + reg.intercept));
+      ctx.lineTo(toX(rightOffset), toY(reg.slope * rightOffset + reg.intercept));
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
