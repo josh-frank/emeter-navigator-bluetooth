@@ -149,53 +149,52 @@
     <span id="ble-status">disconnected</span>
   </div>
 
-  <canvas id="poly" width="320" height="80"
-    style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
+  <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
 
   <script>
     // ── UUIDs (match animated meter / ESP32 firmware) ──
     const BLE_SERVICE_UUID = "454d4554-0000-1000-8000-00805f9b34fb";
-    const BLE_CHAR_UUID    = "454d4554-4552-4c45-8d41-52454144494e";
+    const BLE_CHAR_UUID = "454d4554-4552-4c45-8d41-52454144494e";
 
     const needle = document.getElementById("needle");
 
-    let toneArm   = 0;
+    let toneArm = 0;
     let sensitivity = 2;
 
-    document.getElementById("ta").oninput   = e => { toneArm      = parseFloat(e.target.value); };
-    document.getElementById("sens").oninput = e => { sensitivity  = parseFloat(e.target.value); };
+    document.getElementById("ta").oninput = e => { toneArm = parseFloat(e.target.value); };
+    document.getElementById("sens").oninput = e => { sensitivity = parseFloat(e.target.value); };
 
     let baseline = null;
-    let smooth   = null;
+    let smooth = null;
     const SMOOTH = 0.1;
 
     function updateNeedle(uS) {
-      if (smooth   === null) smooth   = uS;
+      if (smooth === null) smooth = uS;
       if (baseline === null) baseline = uS;
 
-      smooth   = SMOOTH * uS + (1 - SMOOTH) * smooth;
-      baseline = 0.001  * smooth + 0.999 * baseline;
+      smooth = SMOOTH * uS + (1 - SMOOTH) * smooth;
+      baseline = 0.001 * smooth + 0.999 * baseline;
 
       let signal = smooth - baseline;
-      let drive  = signal * sensitivity;
-      let final  = Math.max(-1, Math.min(1, -drive + toneArm));
-      let angle  = -90 + (final + 1) * 90;
+      let drive = signal * sensitivity;
+      let final = Math.max(-1, Math.min(1, -drive + toneArm));
+      let angle = -90 + (final + 1) * 90;
 
       needle.style.transform = `rotate(${angle}deg)`;
     }
 
     // ── Polygram (canvas) ──
     const polyCanvas = document.getElementById("poly");
-    const ctx        = polyCanvas.getContext("2d");
+    const ctx = polyCanvas.getContext("2d");
     const W = 320, H = 80;
 
-    let polyData    = [];          // { t, uS }
-    let polyMin     = Infinity;    // running min — updated incrementally
-    let polyMax     = -Infinity;   // running max
+    let polyData = [];          // { t, uS }
+    let polyMin = Infinity;    // running min — updated incrementally
+    let polyMax = -Infinity;   // running max
     const WINDOW_MS = 30000;
 
     // ── line-of-best-fit config ──
-    const LOBF_WINDOW_MS  = 2000;
+    const LOBF_WINDOW_MS = 2000;
     const RESIDUAL_THRESH = 0.1;
 
     let showLobf = false;
@@ -211,18 +210,18 @@
     };
 
     const residualEl = document.getElementById("residual-display");
-    let   alertTimer  = null;
+    let alertTimer = null;
 
     function clearResidual() {
       residualEl.textContent = "";
-      residualEl.className   = "";
+      residualEl.className = "";
     }
 
     function flashResidual(residual) {
       const sign = residual < 0 ? "▼" : "▲";
-      const cls  = residual < 0 ? "alert-fall" : "alert-rise";
+      const cls = residual < 0 ? "alert-fall" : "alert-rise";
       residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} µS`;
-      residualEl.className   = cls;
+      residualEl.className = cls;
       clearTimeout(alertTimer);
       alertTimer = setTimeout(clearResidual, 2000);
     }
@@ -243,7 +242,7 @@
       if (reg_n < 2) return null;
       const denom = reg_n * reg_sxx - reg_sx * reg_sx;
       if (Math.abs(denom) < 1e-6) return null;
-      const slope     = (reg_n * reg_sxy - reg_sx * reg_sy) / denom;
+      const slope = (reg_n * reg_sxy - reg_sx * reg_sy) / denom;
       const intercept = (reg_sy - slope * reg_sx) / reg_n;
       return { slope, intercept };
     }
@@ -252,7 +251,7 @@
     let lobfData = [];   // { t, uS } — points currently in the regression
 
     function updatePolygram(uS) {
-      const now    = Date.now();
+      const now = Date.now();
       const cutoff = now - WINDOW_MS;
 
       // ── push new point into display buffer ──
@@ -302,9 +301,9 @@
       ctx.clearRect(0, 0, W, H);
       if (polyData.length < 2) return;
 
-      const now   = Date.now();
-      const pad   = Math.max((polyMax - polyMin) * 0.2, 2);
-      const lo    = polyMin - pad;
+      const now = Date.now();
+      const pad = Math.max((polyMax - polyMin) * 0.2, 2);
+      const lo = polyMin - pad;
       const range = (polyMax + pad - lo) || 1;
 
       const toY = v => H * (1 - (v - lo) / range);
@@ -313,9 +312,9 @@
       // signal path
       ctx.beginPath();
       ctx.strokeStyle = "red";
-      ctx.lineWidth   = 1.5;
-      ctx.lineJoin    = "round";
-      ctx.lineCap     = "round";
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
       for (let i = 0; i < polyData.length; i++) {
         const x = toX(polyData[i].t);
         const y = toY(polyData[i].uS);
@@ -328,15 +327,15 @@
       const reg = regResult();
       if (!reg) return;
 
-      const leftOffset  = now - WINDOW_MS;
+      const leftOffset = now - WINDOW_MS;
       const rightOffset = now;
 
       ctx.beginPath();
       ctx.strokeStyle = "#aa8800";
-      ctx.lineWidth   = 1;
+      ctx.lineWidth = 1;
       ctx.globalAlpha = 0.7;
       ctx.setLineDash([3, 3]);
-      ctx.moveTo(toX(leftOffset),  toY(reg.slope * leftOffset  + reg.intercept));
+      ctx.moveTo(toX(leftOffset), toY(reg.slope * leftOffset + reg.intercept));
       ctx.lineTo(toX(rightOffset), toY(reg.slope * rightOffset + reg.intercept));
       ctx.stroke();
       ctx.setLineDash([]);
@@ -354,98 +353,127 @@
     }
 
     // ── BLE ──
-      const bleBtn    = document.getElementById("ble-btn");
-      const bleStatus = document.getElementById("ble-status");
-      let bleDevice   = null;
-      let bleChar     = null;
+    const bleBtn = document.getElementById("ble-btn");
+    const bleStatus = document.getElementById("ble-status");
+    let bleDevice = null;
+    let bleChar = null;
+    let intentionalDisconnect = false;
 
-      function setBleStatus(text, cls) {
-        bleStatus.textContent = text;
-        bleStatus.className   = cls || "";
+    // Named listener refs so they can be removed before re-adding
+    let boundDisconnectHandler = null;
+    let boundCharHandler = null;
+
+    function setBleStatus(text, cls) {
+      bleStatus.textContent = text;
+      bleStatus.className = cls || "";
+    }
+
+    function charHandler(e) {
+      try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
+    }
+
+    // ── tear down all listeners cleanly ──
+    function bleCleanup() {
+      if (bleChar && boundCharHandler) {
+        bleChar.removeEventListener("characteristicvaluechanged", boundCharHandler);
       }
-
-      // ── attach notifications on a live server handle ──
-      async function attachNotifications(server) {
-        const service = await server.getPrimaryService(BLE_SERVICE_UUID);
-        bleChar       = await service.getCharacteristic(BLE_CHAR_UUID);
-        await bleChar.startNotifications();
-        bleChar.addEventListener("characteristicvaluechanged", e => {
-          try { handleFrame(JSON.parse(new TextDecoder().decode(e.target.value))); } catch (_) { }
-        });
+      if (bleDevice && boundDisconnectHandler) {
+        bleDevice.removeEventListener("gattserverdisconnected", boundDisconnectHandler);
       }
+      bleChar = null;
+      boundCharHandler = null;
+      boundDisconnectHandler = null;
+    }
 
-      // ── reconnect loop — retries up to 3x on unexpected disconnect ──
-      let intentionalDisconnect = false;
+    // ── attach notifications on a live server handle ──
+    async function attachNotifications(server) {
+      const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+      bleChar = await service.getCharacteristic(BLE_CHAR_UUID);
+      await bleChar.startNotifications();
+      boundCharHandler = charHandler;
+      bleChar.addEventListener("characteristicvaluechanged", boundCharHandler);
+    }
 
-      async function handleDisconnect() {
-        bleChar = null;
-        if (intentionalDisconnect) {
-          setBleStatus("disconnected", "");
-          bleBtn.textContent = "⬡ connect";
-          bleBtn.disabled    = false;
-          return;
-        }
-
-        for (let i = 1; i <= 3; i++) {
-          setBleStatus(`reconnecting (${i}/3)…`, "scanning");
-          bleBtn.textContent = "⬡ disconnect";
-          bleBtn.disabled    = true;
-          await new Promise(r => setTimeout(r, 1000));
-          try {
-            const server = await bleDevice.gatt.connect();
-            await attachNotifications(server);
-            setBleStatus("● connected", "connected");
-            bleBtn.textContent = "⬡ disconnect";
-            bleBtn.disabled    = false;
-            return;
-          } catch (_) { }
-        }
-
-        // all retries exhausted
+    // ── reconnect loop — retries up to 3x on unexpected disconnect ──
+    async function handleDisconnect() {
+      bleChar = null;
+      if (intentionalDisconnect) {
+        bleCleanup();
         setBleStatus("disconnected", "");
         bleBtn.textContent = "⬡ connect";
-        bleBtn.disabled    = false;
+        bleBtn.disabled = false;
+        return;
       }
 
-      async function bleConnect() {
-        if (!navigator.bluetooth) {
-          setBleStatus("no web bluetooth", "error");
-          return;
-        }
-
-        if (bleDevice && bleDevice.gatt.connected) {
-          intentionalDisconnect = true;
-          bleDevice.gatt.disconnect();
-          return;
-        }
-
+      for (let i = 1; i <= 3; i++) {
+        setBleStatus(`reconnecting (${i}/3)…`, "scanning");
+        bleBtn.textContent = "⬡ disconnect";
         bleBtn.disabled = true;
-        setBleStatus("scanning…", "scanning");
-
+        await new Promise(r => setTimeout(r, 1000));
         try {
-          bleDevice = await navigator.bluetooth.requestDevice({
-            filters: [{ services: [BLE_SERVICE_UUID] }]
-          });
-
-          intentionalDisconnect = false;
-          bleDevice.addEventListener("gattserverdisconnected", handleDisconnect);
-
-          setBleStatus("connecting…", "scanning");
           const server = await bleDevice.gatt.connect();
           await attachNotifications(server);
-
           setBleStatus("● connected", "connected");
           bleBtn.textContent = "⬡ disconnect";
-          bleBtn.disabled    = false;
-
-        } catch (err) {
-          setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
-          bleBtn.textContent = "⬡ connect";
-          bleBtn.disabled    = false;
-        }
+          bleBtn.disabled = false;
+          return;
+        } catch (_) { }
       }
 
-      bleBtn.addEventListener("click", bleConnect);
+      // all retries exhausted
+      bleCleanup();
+      setBleStatus("disconnected", "");
+      bleBtn.textContent = "⬡ connect";
+      bleBtn.disabled = false;
+    }
+
+    async function bleConnect() {
+      if (!navigator.bluetooth) {
+        setBleStatus("no web bluetooth", "error");
+        return;
+      }
+
+      if (bleDevice && bleDevice.gatt.connected) {
+        intentionalDisconnect = true;
+        bleDevice.gatt.disconnect();
+        // UI update deferred to handleDisconnect — don't touch state here
+        return;
+      }
+
+      bleBtn.disabled = true;
+      setBleStatus("scanning…", "scanning");
+
+      try {
+        // Always clean up any previous device before requesting a new one
+        bleCleanup();
+        bleDevice = null;
+
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [BLE_SERVICE_UUID] }]
+        });
+
+        intentionalDisconnect = false;
+        boundDisconnectHandler = handleDisconnect;
+        bleDevice.addEventListener("gattserverdisconnected", boundDisconnectHandler);
+
+        setBleStatus("connecting…", "scanning");
+        const server = await bleDevice.gatt.connect();
+        await attachNotifications(server);
+
+        setBleStatus("● connected", "connected");
+        bleBtn.textContent = "⬡ disconnect";
+        bleBtn.disabled = false;
+
+      } catch (err) {
+        bleCleanup();
+        bleDevice = null;
+        setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
+        bleBtn.textContent = "⬡ connect";
+        bleBtn.disabled = false;
+      }
+    }
+
+    bleBtn.addEventListener("click", bleConnect);
   </script>
 
 </body>
