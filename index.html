@@ -79,37 +79,6 @@
     #ble-status.error {
       color: #c44;
     }
-
-    /* ── residual alert ── */
-    #residual-display {
-      font-size: 11px;
-      color: #555;
-      margin: 4px auto;
-      height: 16px;
-      transition: color 0.1s;
-    }
-
-    #residual-display.alert-fall {
-      color: #f44;
-    }
-
-    #residual-display.alert-rise {
-      color: #4af;
-    }
-
-    #lobf-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      color: #555;
-      cursor: pointer;
-      margin: 4px auto;
-    }
-
-    #lobf-label input {
-      cursor: pointer;
-    }
   </style>
 </head>
 
@@ -136,12 +105,6 @@
   </div>
 
   <div>µS: <span id="us">—</span></div>
-
-  <div id="residual-display"></div>
-
-  <label id="lobf-label">
-    <input type="checkbox" id="lobf-check"> trend line
-  </label>
 
   <div id="ble">
     <button id="ble-btn">⬡ connect</button>
@@ -193,63 +156,6 @@
     let polyMax = -Infinity;   // running max
     const WINDOW_MS = 30000;
 
-    // ── line-of-best-fit config ──
-    const LOBF_WINDOW_MS = 2000;
-    const RESIDUAL_THRESH = 0.1;
-
-    let showLobf = false;
-    document.getElementById("lobf-check").onchange = e => {
-      showLobf = e.target.checked;
-      if (!showLobf) {
-        clearResidual();
-      } else {
-        // reset accumulators so stale data doesn't seed the regression
-        reg_sx = 0; reg_sy = 0; reg_sxx = 0; reg_sxy = 0; reg_n = 0;
-        lobfData = [];
-      }
-    };
-
-    const residualEl = document.getElementById("residual-display");
-    let alertTimer = null;
-
-    function clearResidual() {
-      residualEl.textContent = "";
-      residualEl.className = "";
-    }
-
-    function flashResidual(residual) {
-      const sign = residual < 0 ? "▼" : "▲";
-      const cls = residual < 0 ? "alert-fall" : "alert-rise";
-      residualEl.textContent = `! ${sign} ${Math.abs(residual).toFixed(3)} µS`;
-      residualEl.className = cls;
-      clearTimeout(alertTimer);
-      alertTimer = setTimeout(clearResidual, 2000);
-    }
-
-    // ── Online incremental regression over a sliding time window ──
-    // Maintains sx, sy, sxx, sxy, n as running sums.
-    // x = timestamp (ms), y = µS value.
-    // Adding or removing a point is O(1) — no loops, no allocations.
-    let reg_sx = 0, reg_sy = 0, reg_sxx = 0, reg_sxy = 0, reg_n = 0;
-
-    function regAdd(t, y) {
-      reg_sx += t; reg_sy += y; reg_sxx += t * t; reg_sxy += t * y; reg_n++;
-    }
-    function regRemove(t, y) {
-      reg_sx -= t; reg_sy -= y; reg_sxx -= t * t; reg_sxy -= t * y; reg_n--;
-    }
-    function regResult() {
-      if (reg_n < 2) return null;
-      const denom = reg_n * reg_sxx - reg_sx * reg_sx;
-      if (Math.abs(denom) < 1e-6) return null;
-      const slope = (reg_n * reg_sxy - reg_sx * reg_sy) / denom;
-      const intercept = (reg_sy - slope * reg_sx) / reg_n;
-      return { slope, intercept };
-    }
-
-    // lobfData mirrors the LOBF_WINDOW_MS slice — separate from polyData
-    let lobfData = [];   // { t, uS } — points currently in the regression
-
     function updatePolygram(uS) {
       const now = Date.now();
       const cutoff = now - WINDOW_MS;
@@ -273,29 +179,8 @@
         if (uS < polyMin) polyMin = uS;
         if (uS > polyMax) polyMax = uS;
       }
-
-      if (!showLobf) return;
-
-      // ── add new point to regression ──
-      lobfData.push({ t: now, uS });
-      regAdd(now, uS);
-
-      // ── evict points outside LOBF window — O(1) amortised ──
-      const lobfCutoff = now - LOBF_WINDOW_MS;
-      while (lobfData.length && lobfData[0].t < lobfCutoff) {
-        const p = lobfData.shift();
-        regRemove(p.t, p.uS);
-      }
-
-      // ── residual: actual vs predicted at t=now ──
-      const reg = regResult();
-      if (reg && Math.abs(uS - (reg.slope * now + reg.intercept)) >= RESIDUAL_THRESH) {
-        flashResidual(uS - (reg.slope * now + reg.intercept));
-      }
     }
 
-
-    // ── canvas render loop — rAF, independent of BLE rate ──
     function renderPolygram() {
       requestAnimationFrame(renderPolygram);
       ctx.clearRect(0, 0, W, H);
@@ -321,25 +206,6 @@
         i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       }
       ctx.stroke();
-
-      // trend line — slope/intercept already maintained by online regression
-      if (!showLobf) return;
-      const reg = regResult();
-      if (!reg) return;
-
-      const leftOffset = now - WINDOW_MS;
-      const rightOffset = now;
-
-      ctx.beginPath();
-      ctx.strokeStyle = "#aa8800";
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = 0.7;
-      ctx.setLineDash([3, 3]);
-      ctx.moveTo(toX(leftOffset), toY(reg.slope * leftOffset + reg.intercept));
-      ctx.lineTo(toX(rightOffset), toY(reg.slope * rightOffset + reg.intercept));
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
     }
 
     renderPolygram(); // kick off rAF loop
