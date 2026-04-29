@@ -642,7 +642,15 @@
       dexSocket.onmessage = e => {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.type === "call") showCall(msg);
+          if (msg.type === "call") {
+            showCall(msg);
+            console.log(
+              "%c[dex] %c%O",
+              "color: green; font-weight: bold;",
+              "color: white; background: gray;",
+              msg
+            );
+          }
         } catch (_) { }
       };
     }
