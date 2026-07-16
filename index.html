@@ -120,6 +120,26 @@
       color: #c44;
     }
 
+    /* ── DEX state machine indicator ── */
+    #dex-state {
+      display: block;
+      margin-top: 4px;
+      font-size: 0.85em;
+      letter-spacing: 0.05em;
+    }
+
+    #dex-state.state-idle {
+      color: #666;
+    }
+
+    #dex-state.state-armed {
+      color: #4c4;
+    }
+
+    #dex-state.state-falling {
+      color: #f84;
+    }
+
     /* ── DEX call toast ── */
     #dex-toast {
       position: fixed;
@@ -251,11 +271,13 @@
     <button id="dex-btn">⬡ dex</button>
     &nbsp;
     <span id="dex-status">disconnected</span>
+    <span id="dex-state" class="state-idle">—</span>
   </div>
 
   <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
 
-  <!-- DEX call toast -->
+  <!-- DEX call toast — disabled for now, showCall() below leaves this
+       commented out but keeps marking events on the polygram.
   <div id="dex-toast">
     <span id="toast-label">● <span id="toast-label-text">read</span></span>
     <span id="toast-conf">0.00</span>
@@ -263,6 +285,7 @@
     <button class="toast-btn no" id="toast-no">👎</button>
     <button id="toast-dismiss">✕</button>
   </div>
+  -->
 
   <script>
     // ── UUIDs (match animated meter / ESP32 firmware) ──
@@ -595,12 +618,23 @@
       dexStatus.className = cls || "";
     }
 
+    const dexStateEl = document.getElementById("dex-state");
+    function setDexState(state) {
+      dexStateEl.textContent = state; // "IDLE" | "ARMED" | "FALLING"
+      dexStateEl.className = "state-" + state.toLowerCase();
+    }
+    function resetDexState() {
+      dexStateEl.textContent = "—";
+      dexStateEl.className = "state-idle";
+    }
+
     function dexConnect() {
       if (dexSocket && dexSocket.readyState === WebSocket.OPEN) {
         dexIntentionalClose = true;
         dexSocket.close();
         dexBtn.textContent = "⬡ dex";
         setDexStatus("disconnected", "");
+        resetDexState();
         return;
       }
 
@@ -630,6 +664,7 @@
         } else {
           setDexStatus("disconnected", "error");
         }
+        resetDexState();
         dismissToast();
       };
 
@@ -650,6 +685,8 @@
               "color: white; background: gray;",
               msg
             );
+          } else if (msg.type === "state") {
+            setDexState(msg.state);
           }
         } catch (_) { }
       };
@@ -657,31 +694,28 @@
 
     dexBtn.addEventListener("click", dexConnect);
 
-    // ── DEX toast ──
-    const toast = document.getElementById("dex-toast");
-    const toastLabelText = document.getElementById("toast-label-text");
-    const toastConf = document.getElementById("toast-conf");
-    const toastYes = document.getElementById("toast-yes");
-    const toastNo = document.getElementById("toast-no");
-    const toastDismiss = document.getElementById("toast-dismiss");
+    // ── DEX toast (disabled for now — DOM above is commented out) ──
+    // const toast = document.getElementById("dex-toast");
+    // const toastLabelText = document.getElementById("toast-label-text");
+    // const toastConf = document.getElementById("toast-conf");
+    // const toastYes = document.getElementById("toast-yes");
+    // const toastNo = document.getElementById("toast-no");
+    // const toastDismiss = document.getElementById("toast-dismiss");
 
     let toastEventId = null;
     let toastTimeout = null;
 
     function showCall(msg) {
-      toastEventId = msg.event_id;
+      // --- toast display disabled for now ---
+      // toastEventId = msg.event_id;
+      // toastLabelText.textContent = msg.label;
+      // toastLabelText.className = msg.label; // "read" or "other"
+      // toastConf.textContent = (msg.confidence * 100).toFixed(0) + "%";
+      // toast.classList.add("visible");
+      // clearTimeout(toastTimeout);
+      // toastTimeout = setTimeout(dismissToast, 8000);
 
-      toastLabelText.textContent = msg.label;
-      toastLabelText.className = msg.label; // "read" or "other"
-      toastConf.textContent = (msg.confidence * 100).toFixed(0) + "%";
-
-      toast.classList.add("visible");
-
-      // auto-dismiss after 8s with no response
-      clearTimeout(toastTimeout);
-      toastTimeout = setTimeout(dismissToast, 8000);
-
-      // mark on polygram
+      // still mark the call on the polygram regardless
       polyTicks.push({ t: Date.now(), label: msg.label });
     }
 
@@ -699,13 +733,13 @@
 
     function dismissToast() {
       clearTimeout(toastTimeout);
-      toast.classList.remove("visible");
+      // toast.classList.remove("visible");
       toastEventId = null;
     }
 
-    toastYes.addEventListener("click", () => sendFeedback(true));
-    toastNo.addEventListener("click", () => sendFeedback(false));
-    toastDismiss.addEventListener("click", dismissToast);
+    // toastYes.addEventListener("click", () => sendFeedback(true));
+    // toastNo.addEventListener("click", () => sendFeedback(false));
+    // toastDismiss.addEventListener("click", dismissToast);
   </script>
 
 </body>
