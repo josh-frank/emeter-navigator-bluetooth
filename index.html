@@ -272,6 +272,9 @@
     &nbsp;
     <span id="dex-status">deactivated</span>
     <span id="dex-state" class="state-idle">—</span>
+    &nbsp;
+    <button id="log-btn">📝 log</button>
+    <span id="log-status">off</span>
   </div>
 
   <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
@@ -293,6 +296,57 @@
     const BLE_CHAR_UUID = "454d4554-4552-4c45-8d41-52454144494e";
 
     const needle = document.getElementById("needle");
+
+    // ── dex.log ──────────────────────────────────────────────────────────
+    // Flip this one line to silence logging entirely (console + file).
+    const DEX_LOGGING = true;
+
+    let logFileHandle = null;
+    let logWritable = null;
+
+    const logBtn = document.getElementById("log-btn");
+    const logStatus = document.getElementById("log-status");
+
+    async function logToggle() {
+      if (logWritable) {
+        await logWritable.close();
+        logWritable = null;
+        logFileHandle = null;
+        logStatus.textContent = "off";
+        logBtn.textContent = "📝 log";
+        return;
+      }
+      try {
+        logFileHandle = await window.showSaveFilePicker({
+          suggestedName: "dex.log",
+          types: [{ description: "Log file", accept: { "text/plain": [".log"] } }],
+        });
+        logWritable = await logFileHandle.createWritable({ keepExistingData: true });
+        // append rather than overwrite: seek to end if the file already had content
+        const existing = await (await logFileHandle.getFile()).size;
+        if (existing) await logWritable.write({ type: "write", position: existing, data: "" });
+        logStatus.textContent = "● " + logFileHandle.name;
+        logBtn.textContent = "📝 log off";
+        log("session", { msg: "log opened" });
+      } catch (err) {
+        // user cancelled the picker, or API unsupported -- console-only is still fine
+        logStatus.textContent = "unavailable";
+      }
+    }
+    logBtn.addEventListener("click", logToggle);
+
+    function log(type, data) {
+      if (!DEX_LOGGING) return;
+      const line = { ts: Date.now(), type, ...data };
+      console.log(`[dex.log] ${type}`, line);
+      if (logWritable) {
+        logWritable.write(JSON.stringify(line) + "\n").catch(() => { });
+      }
+    }
+
+    window.addEventListener("beforeunload", () => {
+      if (logWritable) logWritable.close();
+    });
 
     let toneArm = 0;
     let sensitivity = 2;
@@ -458,6 +512,7 @@
       if (calibCount >= CALIBRATION_FRAMES) {
         dexState = "ARMED";
         setDexStateDisplay(dexState);
+        log("transition", { from: "IDLE", to: "ARMED", baseline, noiseScale });
       }
     }
 
@@ -491,6 +546,7 @@
         debounceCount = 0;
         dexState = "FALLING";
         setDexStateDisplay(dexState);
+        log("transition", { from: "ARMED", to: "FALLING", baseline, noiseScale, thresh });
       }
       return null;
     }
@@ -535,6 +591,7 @@
       dexState = "ARMED";
       preBaseline = null;
       setDexStateDisplay(dexState);
+      log("call", { label: isRead ? "read" : "other", confidence: +confidence.toFixed(3), features });
 
       return { label: isRead ? "read" : "other", confidence: +confidence.toFixed(3), features };
     }
@@ -543,6 +600,9 @@
       const now = tMs ?? Date.now();
       const dt = lastFrameT === null ? 0.05 : Math.max((now - lastFrameT) / 1000, 0.001);
       const delta = lastUS === null ? 0 : uS - lastUS;
+      if (lastFrameT !== null && (dt > 0.15 || dt < 0.01)) {
+        log("dt_anomaly", { dt: +dt.toFixed(4), delta: +delta.toFixed(4) });
+      }
       lastFrameT = now;
       lastUS = uS;
 
@@ -808,17 +868,30 @@
       dexStateEl.className = "state-" + state.toLowerCase();
     }
 
+    let heartbeatTimer = null;
+    const HEARTBEAT_MS = 3000;
+
     function dexToggle() {
       dexActive = !dexActive;
       if (dexActive) {
         dexReset();   // fresh calibration; baseline/smooth untouched
         setDexStatus("● activated", "connected");
         dexBtn.textContent = "⬡ dex off";
+        log("session", { msg: "dex activated" });
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+          if (dexState === "ARMED") {
+            log("heartbeat", { state: dexState, baseline, noiseScale });
+          }
+        }, HEARTBEAT_MS);
       } else {
         setDexStatus("deactivated", "");
         dexBtn.textContent = "⬡ dex";
         dexStateEl.textContent = "—";
         dexStateEl.className = "state-idle";
+        log("session", { msg: "dex deactivated" });
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
     }
 
@@ -828,12 +901,7 @@
     //    commented out; still marks calls on the polygram and logs) ──
     function handleDexCall(result) {
       polyTicks.push({ t: Date.now(), label: result.label });
-      console.log(
-        "%c[dex] %c%O",
-        "color: green; font-weight: bold;",
-        "color: white; background: gray;",
-        result
-      );
+      // console output for this call is already handled by log("call", ...) in dexResolve
     }
   </script>
 
