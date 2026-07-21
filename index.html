@@ -40,84 +40,49 @@
       margin: 10px;
     }
 
-    /* ── BLE ── */
-    #ble {
-      margin: 12px auto;
-    }
-
-    #ble-btn {
+    /* ── shared squeeze-btn style (used by auto-squeeze, ble, dex, log) ── */
+    .squeeze-btn {
       background: none;
-      border: none;
+      border: 1px solid #555;
+      border-radius: 4px;
       color: #888;
       font-family: monospace;
       font-size: 1em;
       cursor: pointer;
-      padding: 0;
+      padding: 4px 14px;
+      transition: border-color 0.1s, color 0.1s;
     }
 
-    #ble-btn:hover:not(:disabled) {
+    .squeeze-btn:hover:not(:disabled) {
+      border-color: #aaa;
       color: #ddd;
     }
 
-    #ble-btn:disabled {
+    .squeeze-btn:disabled {
       opacity: 0.4;
       cursor: default;
     }
 
-    #ble-status {
-      color: #555;
-    }
-
-    #ble-status.connected {
+    .squeeze-btn.on {
+      border-color: #4c4;
       color: #4c4;
     }
 
-    #ble-status.scanning {
+    .squeeze-btn.scanning {
+      border-color: #cc4;
       color: #cc4;
     }
 
-    #ble-status.error {
+    .squeeze-btn.error {
+      border-color: #c44;
       color: #c44;
     }
 
-    /* ── DEX ── */
-    #dex {
-      margin: 12px auto;
-    }
-
-    #dex-btn {
-      background: none;
-      border: none;
-      color: #888;
-      font-family: monospace;
-      font-size: 1em;
-      cursor: pointer;
-      padding: 0;
-    }
-
-    #dex-btn:hover:not(:disabled) {
-      color: #ddd;
-    }
-
-    #dex-btn:disabled {
-      opacity: 0.4;
-      cursor: default;
-    }
-
-    #dex-status {
-      color: #555;
-    }
-
-    #dex-status.connected {
-      color: #4c4;
-    }
-
-    #dex-status.scanning {
-      color: #cc4;
-    }
-
-    #dex-status.error {
-      color: #c44;
+    #io-controls {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 14px;
     }
 
     /* ── DEX state machine indicator ── */
@@ -245,37 +210,26 @@
     <label>
       Sensitivity (zoom)
       <br>
-      <input id="sens" type="range" min="0.1" max="10" step="0.1" value="2">
+      <input id="sens" type="range" min="0.01" max="1" step="0.01" value="2">
     </label>
 
   </div>
 
   <div id="squeeze-wrap" style="margin: 14px auto;">
-    <button id="squeeze-btn" style="background:none; border:1px solid #555; border-radius:4px; color:#888;
-             font-family:monospace; font-size:1em; cursor:pointer; padding:4px 14px;
-             transition: border-color 0.1s, color 0.1s;">
-      ◉ auto-squeeze
-    </button>
+    <button id="squeeze-btn" class="squeeze-btn">◉ auto-squeeze</button>
     <span id="squeeze-status" style="color:#555; margin-left:8px;"></span>
   </div>
 
   <div>µS: <span id="us">—</span> &nbsp; baseline: <span id="baseline-readout">—</span></div>
 
-  <div id="ble">
-    <button id="ble-btn">⬡ connect</button>
-    &nbsp;
-    <span id="ble-status">disconnected</span>
+  <div id="io-controls">
+    <button id="ble-btn" class="squeeze-btn">disconnected</button>
+    <button id="dex-btn" class="squeeze-btn">deactivated</button>
+    <button id="log-btn" class="squeeze-btn">log off</button>
   </div>
 
-  <div id="dex">
-    <button id="dex-btn">⬡ dex</button>
-    &nbsp;
-    <span id="dex-status">deactivated</span>
-    <span id="dex-state" class="state-idle">—</span>
-    &nbsp;
-    <button id="log-btn">📝 log</button>
-    <span id="log-status">off</span>
-  </div>
+  <div id="dex-state" class="state-idle"
+    style="text-align:center; margin-top:6px; font-size:0.85em; letter-spacing:0.05em;">—</div>
 
   <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
 
@@ -305,15 +259,14 @@
     let logWritable = null;
 
     const logBtn = document.getElementById("log-btn");
-    const logStatus = document.getElementById("log-status");
 
     async function logToggle() {
       if (logWritable) {
         await logWritable.close();
         logWritable = null;
         logFileHandle = null;
-        logStatus.textContent = "off";
-        logBtn.textContent = "📝 log";
+        logBtn.textContent = "log off";
+        logBtn.classList.remove("on");
         return;
       }
       try {
@@ -325,12 +278,14 @@
         // append rather than overwrite: seek to end if the file already had content
         const existing = await (await logFileHandle.getFile()).size;
         if (existing) await logWritable.write({ type: "write", position: existing, data: "" });
-        logStatus.textContent = "● " + logFileHandle.name;
-        logBtn.textContent = "📝 log off";
+        logBtn.textContent = logFileHandle.name;
+        logBtn.classList.add("on");
         log("session", { msg: "log opened" });
       } catch (err) {
         // user cancelled the picker, or API unsupported -- console-only is still fine
-        logStatus.textContent = "unavailable";
+        logBtn.textContent = "unavailable";
+        logBtn.classList.add("error");
+        setTimeout(() => { logBtn.textContent = "log off"; logBtn.classList.remove("error"); }, 1500);
       }
     }
     logBtn.addEventListener("click", logToggle);
@@ -455,7 +410,7 @@
     const CALIBRATION_FRAMES = 100;   // ~5s at 20Hz
     const NOISE_TAU_S = 5.0;
     const NOISE_FLOOR_MIN = 1e-4;
-    const ARM_THRESH_K = 5.0;
+    const ARM_THRESH_K = 4.0;         // adjust fall sensitivity here
     const DEBOUNCE_FRAMES = 3;        // filters single-frame "pops"
     const SETTLE_THRESH_K = 2.0;
     const SETTLE_FRAMES = 6;
@@ -736,7 +691,6 @@
 
     // ── BLE ──
     const bleBtn = document.getElementById("ble-btn");
-    const bleStatus = document.getElementById("ble-status");
     let bleDevice = null;
     let bleChar = null;
     let intentionalDisconnect = false;
@@ -745,8 +699,9 @@
     let boundCharHandler = null;
 
     function setBleStatus(text, cls) {
-      bleStatus.textContent = text;
-      bleStatus.className = cls || "";
+      bleBtn.textContent = text;
+      bleBtn.classList.remove("on", "scanning", "error");
+      if (cls) bleBtn.classList.add(cls);
     }
 
     function charHandler(e) {
@@ -778,22 +733,19 @@
       if (intentionalDisconnect) {
         bleCleanup();
         setBleStatus("disconnected", "");
-        bleBtn.textContent = "⬡ connect";
         bleBtn.disabled = false;
         return;
       }
 
       for (let i = 1; i <= 3; i++) {
         setBleStatus(`reconnecting (${i}/3)…`, "scanning");
-        bleBtn.textContent = "⬡ disconnect";
         bleBtn.disabled = true;
         await new Promise(r => setTimeout(r, 1000));
         try {
           const server = await bleDevice.gatt.connect();
           await attachNotifications(server);
           resetNeedleState();
-          setBleStatus("● connected", "connected");
-          bleBtn.textContent = "⬡ disconnect";
+          setBleStatus("connected", "on");
           bleBtn.disabled = false;
           return;
         } catch (_) { }
@@ -801,7 +753,6 @@
 
       bleCleanup();
       setBleStatus("disconnected", "");
-      bleBtn.textContent = "⬡ connect";
       bleBtn.disabled = false;
     }
 
@@ -838,15 +789,13 @@
 
         resetNeedleState();
 
-        setBleStatus("● connected", "connected");
-        bleBtn.textContent = "⬡ disconnect";
+        setBleStatus("connected", "on");
         bleBtn.disabled = false;
 
       } catch (err) {
         bleCleanup();
         bleDevice = null;
         setBleStatus(err.name === "NotFoundError" ? "cancelled" : err.message, "error");
-        bleBtn.textContent = "⬡ connect";
         bleBtn.disabled = false;
       }
     }
@@ -855,11 +804,11 @@
 
     // ── DEX toggle (local now — no server, no socket) ──
     const dexBtn = document.getElementById("dex-btn");
-    const dexStatus = document.getElementById("dex-status");
 
     function setDexStatus(text, cls) {
-      dexStatus.textContent = text;
-      dexStatus.className = cls || "";
+      dexBtn.textContent = text;
+      dexBtn.classList.remove("on", "scanning", "error");
+      if (cls) dexBtn.classList.add(cls);
     }
 
     const dexStateEl = document.getElementById("dex-state");
@@ -875,8 +824,7 @@
       dexActive = !dexActive;
       if (dexActive) {
         dexReset();   // fresh calibration; baseline/smooth untouched
-        setDexStatus("● activated", "connected");
-        dexBtn.textContent = "⬡ dex off";
+        setDexStatus("activated", "on");
         log("session", { msg: "dex activated" });
         clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
@@ -886,7 +834,6 @@
         }, HEARTBEAT_MS);
       } else {
         setDexStatus("deactivated", "");
-        dexBtn.textContent = "⬡ dex";
         dexStateEl.textContent = "—";
         dexStateEl.className = "state-idle";
         log("session", { msg: "dex deactivated" });
