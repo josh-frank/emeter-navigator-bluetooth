@@ -5,244 +5,68 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>e meter</title>
-
-  <style>
-    body {
-      background: #111;
-      color: #ddd;
-      font-family: monospace;
-      text-align: center;
-    }
-
-    #meter {
-      width: 320px;
-      height: 180px;
-      margin: 40px auto;
-      position: relative;
-    }
-
-    #needle {
-      width: 2px;
-      height: 130px;
-      background: red;
-      position: absolute;
-      left: 50%;
-      bottom: 20px;
-      transform-origin: bottom center;
-    }
-
-    .controls {
-      margin-top: 20px;
-    }
-
-    label {
-      display: block;
-      margin: 10px;
-    }
-
-    /* ── shared squeeze-btn style (used by auto-squeeze, ble, dex, log) ── */
-    .squeeze-btn {
-      background: none;
-      border: 1px solid #555;
-      border-radius: 4px;
-      color: #888;
-      font-family: monospace;
-      font-size: 1em;
-      cursor: pointer;
-      padding: 4px 14px;
-      transition: border-color 0.1s, color 0.1s;
-    }
-
-    .squeeze-btn:hover:not(:disabled) {
-      border-color: #aaa;
-      color: #ddd;
-    }
-
-    .squeeze-btn:disabled {
-      opacity: 0.4;
-      cursor: default;
-    }
-
-    .squeeze-btn.on {
-      border-color: #4c4;
-      color: #4c4;
-    }
-
-    .squeeze-btn.scanning {
-      border-color: #cc4;
-      color: #cc4;
-    }
-
-    .squeeze-btn.error {
-      border-color: #c44;
-      color: #c44;
-    }
-
-    #io-controls {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-      margin-top: 14px;
-    }
-
-    /* ── DEX state machine indicator ── */
-    #dex-state {
-      display: block;
-      margin-top: 4px;
-      font-size: 0.85em;
-      letter-spacing: 0.05em;
-    }
-
-    #dex-state.state-idle {
-      color: #666;
-    }
-
-    #dex-state.state-armed {
-      color: #4c4;
-    }
-
-    #dex-state.state-falling {
-      color: #f84;
-    }
-
-    /* ── DEX call toast ── */
-    #dex-toast {
-      position: fixed;
-      bottom: 32px;
-      left: 50%;
-      transform: translateX(-50%) translateY(80px);
-      background: #1a1a1a;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-family: monospace;
-      font-size: 0.9em;
-      white-space: nowrap;
-      opacity: 0;
-      transition: opacity 0.2s ease, transform 0.2s ease;
-      pointer-events: none;
-      z-index: 100;
-    }
-
-    #dex-toast.visible {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-      pointer-events: auto;
-    }
-
-    #toast-label {
-      color: #ddd;
-    }
-
-    #toast-label span.read {
-      color: #f55;
-    }
-
-    #toast-label span.other {
-      color: #888;
-    }
-
-    #toast-conf {
-      color: #555;
-      font-size: 0.85em;
-    }
-
-    .toast-btn {
-      background: none;
-      border: 1px solid #444;
-      border-radius: 4px;
-      color: #aaa;
-      font-family: monospace;
-      font-size: 0.9em;
-      cursor: pointer;
-      padding: 2px 8px;
-      transition: border-color 0.1s, color 0.1s;
-    }
-
-    .toast-btn:hover {
-      border-color: #aaa;
-      color: #fff;
-    }
-
-    .toast-btn.yes:hover {
-      border-color: #4c4;
-      color: #4c4;
-    }
-
-    .toast-btn.no:hover {
-      border-color: #c44;
-      color: #c44;
-    }
-
-    #toast-dismiss {
-      color: #444;
-      background: none;
-      border: none;
-      font-family: monospace;
-      cursor: pointer;
-      padding: 0 0 0 4px;
-      font-size: 1em;
-    }
-
-    #toast-dismiss:hover {
-      color: #888;
-    }
-  </style>
+  <link rel="stylesheet" type="text/css" href="index.css">
 </head>
 
 <body>
 
-  <div id="meter">
-    <div id="needle"></div>
-  </div>
+  <main>
 
-  <div class="controls">
+    <section>
+  
+      <div id="meter">
+        <div id="needle"></div>
+      </div>
+    
+      <div class="controls">
+        <label>
+          Tone Arm (scroll)
+          <br>
+          <input id="ta" type="range" min="-5" max="5" step="0.01" value="0">
+        </label>
+        <label>
+          Sensitivity (zoom)
+          <br>
+          <input id="sens" type="range" min="0.01" max="1" step="0.01" value="2">
+        </label>
+      </div>
+  
+    </section>
+  
+    <section>
+  
+      <div id="squeeze-wrap" style="margin: 14px auto;">
+        <button id="squeeze-btn" class="squeeze-btn">◉ auto-squeeze</button>
+        <span id="squeeze-status" style="color:#555; margin-left:8px;"></span>
+      </div>
+    
+      <div>µS: <span id="us">—</span> &nbsp; baseline: <span id="baseline-readout">—</span></div>
+    
+      <div id="io-controls">
+        <button id="ble-btn" class="squeeze-btn">disconnected</button>
+        <button id="dex-btn" class="squeeze-btn">deactivated</button>
+        <button id="log-btn" class="squeeze-btn">log off</button>
+      </div>
+    
+      <div id="dex-state" class="state-idle"
+        style="text-align:center; margin-top:6px; font-size:0.85em; letter-spacing:0.05em;">—</div>
+    
+      <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
+  
+    </section>
 
-    <label>
-      Tone Arm (scroll)
-      <br>
-      <input id="ta" type="range" min="-5" max="5" step="0.01" value="0">
-    </label>
-
-    <label>
-      Sensitivity (zoom)
-      <br>
-      <input id="sens" type="range" min="0.01" max="1" step="0.01" value="2">
-    </label>
-
-  </div>
-
-  <div id="squeeze-wrap" style="margin: 14px auto;">
-    <button id="squeeze-btn" class="squeeze-btn">◉ auto-squeeze</button>
-    <span id="squeeze-status" style="color:#555; margin-left:8px;"></span>
-  </div>
-
-  <div>µS: <span id="us">—</span> &nbsp; baseline: <span id="baseline-readout">—</span></div>
-
-  <div id="io-controls">
-    <button id="ble-btn" class="squeeze-btn">disconnected</button>
-    <button id="dex-btn" class="squeeze-btn">deactivated</button>
-    <button id="log-btn" class="squeeze-btn">log off</button>
-  </div>
-
-  <div id="dex-state" class="state-idle"
-    style="text-align:center; margin-top:6px; font-size:0.85em; letter-spacing:0.05em;">—</div>
-
-  <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
-
-  <!-- DEX call toast — disabled for now, handleDexCall() below leaves this
-       commented out but keeps marking events on the polygram.
-  <div id="dex-toast">
-    <span id="toast-label">● <span id="toast-label-text">read</span></span>
-    <span id="toast-conf">0.00</span>
-    <button class="toast-btn yes" id="toast-yes">👍</button>
-    <button class="toast-btn no" id="toast-no">👎</button>
-    <button id="toast-dismiss">✕</button>
-  </div>
-  -->
+    <!-- DEX call toast — disabled for now, handleDexCall() below leaves this
+         commented out but keeps marking events on the polygram.
+    <div id="dex-toast">
+      <span id="toast-label">● <span id="toast-label-text">read</span></span>
+      <span id="toast-conf">0.00</span>
+      <button class="toast-btn yes" id="toast-yes">👍</button>
+      <button class="toast-btn no" id="toast-no">👎</button>
+      <button id="toast-dismiss">✕</button>
+    </div>
+    -->
+    
+  </main>
 
   <script>
     // ── UUIDs (match animated meter / ESP32 firmware) ──

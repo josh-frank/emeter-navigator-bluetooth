@@ -1,0 +1,189 @@
+body {
+  background: #111;
+  color: #ddd;
+  font-family: monospace;
+  text-align: center;
+}
+
+main {
+  height: 100vh;
+  display: flex;
+  flex-flow: column wrap;
+}
+
+#meter {
+  width: 320px;
+  height: 180px;
+  margin: 40px auto;
+  position: relative;
+}
+
+#needle {
+  width: 2px;
+  height: 125px;
+  background: red;
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform-origin: bottom center;
+}
+
+.controls {
+  margin-top: 20px;
+}
+
+label {
+  display: block;
+  margin: 10px;
+}
+
+/* ── shared squeeze-btn style (used by auto-squeeze, ble, dex, log) ── */
+.squeeze-btn {
+  background: none;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #888;
+  font-family: monospace;
+  font-size: 1em;
+  cursor: pointer;
+  padding: 4px 14px;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.squeeze-btn:hover:not(:disabled) {
+  border-color: #aaa;
+  color: #ddd;
+}
+
+.squeeze-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.squeeze-btn.on {
+  border-color: #4c4;
+  color: #4c4;
+}
+
+.squeeze-btn.scanning {
+  border-color: #cc4;
+  color: #cc4;
+}
+
+.squeeze-btn.error {
+  border-color: #c44;
+  color: #c44;
+}
+
+#io-controls {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+/* ── DEX state machine indicator ── */
+#dex-state {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.85em;
+  letter-spacing: 0.05em;
+}
+
+#dex-state.state-idle {
+  color: #666;
+}
+
+#dex-state.state-armed {
+  color: #4c4;
+}
+
+#dex-state.state-falling {
+  color: #f84;
+}
+
+/* ── DEX call toast ── */
+#dex-toast {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: monospace;
+  font-size: 0.9em;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  z-index: 100;
+}
+
+#dex-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+#toast-label {
+  color: #ddd;
+}
+
+#toast-label span.read {
+  color: #f55;
+}
+
+#toast-label span.other {
+  color: #888;
+}
+
+#toast-conf {
+  color: #555;
+  font-size: 0.85em;
+}
+
+.toast-btn {
+  background: none;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #aaa;
+  font-family: monospace;
+  font-size: 0.9em;
+  cursor: pointer;
+  padding: 2px 8px;
+  transition: border-color 0.1s, color 0.1s;
+}
+
+.toast-btn:hover {
+  border-color: #aaa;
+  color: #fff;
+}
+
+.toast-btn.yes:hover {
+  border-color: #4c4;
+  color: #4c4;
+}
+
+.toast-btn.no:hover {
+  border-color: #c44;
+  color: #c44;
+}
+
+#toast-dismiss {
+  color: #444;
+  background: none;
+  border: none;
+  font-family: monospace;
+  cursor: pointer;
+  padding: 0 0 0 4px;
+  font-size: 1em;
+}
+
+#toast-dismiss:hover {
+  color: #888;
+}
