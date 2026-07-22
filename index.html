@@ -13,11 +13,11 @@
   <main>
 
     <section>
-  
+
       <div id="meter">
         <div id="needle"></div>
       </div>
-    
+
       <div class="controls">
         <label>
           Tone Arm (scroll)
@@ -30,29 +30,30 @@
           <input id="sens" type="range" min="0.01" max="1" step="0.01" value="2">
         </label>
       </div>
-  
+
     </section>
-  
+
     <section>
-  
+
       <div id="squeeze-wrap" style="margin: 14px auto;">
         <button id="squeeze-btn" class="squeeze-btn">◉ auto-squeeze</button>
         <span id="squeeze-status" style="color:#555; margin-left:8px;"></span>
       </div>
-    
+
       <div>µS: <span id="us">—</span> &nbsp; baseline: <span id="baseline-readout">—</span></div>
-    
+
       <div id="io-controls">
         <button id="ble-btn" class="squeeze-btn">disconnected</button>
         <button id="dex-btn" class="squeeze-btn">deactivated</button>
         <button id="log-btn" class="squeeze-btn">log off</button>
       </div>
-    
+
       <div id="dex-state" class="state-idle"
         style="text-align:center; margin-top:6px; font-size:0.85em; letter-spacing:0.05em;">—</div>
-    
-      <canvas id="poly" width="320" height="80" style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
-  
+
+      <canvas id="poly" width="320" height="80"
+        style="display:block; width:320px; height:80px; margin:12px auto;"></canvas>
+
     </section>
 
     <!-- DEX call toast — disabled for now, handleDexCall() below leaves this
@@ -65,7 +66,7 @@
       <button id="toast-dismiss">✕</button>
     </div>
     -->
-    
+
   </main>
 
   <script>
@@ -231,11 +232,13 @@
     // did -- the needle simply stops re-nulling mid-event, which is what
     // you'd want anyway). When dex is inactive, the plain EMA above runs
     // instead. Either way there is exactly one baseline value in existence.
+    // ACCUM_THRESH_K is just a placeholder.
     const CALIBRATION_FRAMES = 100;   // ~5s at 20Hz
     const NOISE_TAU_S = 5.0;
     const NOISE_FLOOR_MIN = 1e-4;
     const ARM_THRESH_K = 4.0;         // adjust fall sensitivity here
-    const DEBOUNCE_FRAMES = 3;        // filters single-frame "pops"
+    const ACCUM_TAU_S = 1.5;          // memory horizon: how long a decline "counts" before decaying away
+    const ACCUM_THRESH_K = 6.0;       // separate scale from ARM_THRESH_K — retune against real data
     const SETTLE_THRESH_K = 2.0;
     const SETTLE_FRAMES = 6;
     const FALLING_TIMEOUT_S = 20.0;
@@ -247,6 +250,7 @@
     let noiseScale = null;
     let calibCount = 0;
     let debounceCount = 0;
+    let declineAccum = 0;             // decaying sum of recent decline (µS-ish, not a rate)
     let settleCount = 0;
     let prevSign = 0;
     let runLen = 0;
@@ -263,6 +267,7 @@
       noiseScale = null;
       calibCount = 0;
       debounceCount = 0;
+      declineAccum = 0;
       settleCount = 0;
       prevSign = 0;
       runLen = 0;
@@ -296,12 +301,17 @@
     }
 
     function dexTickArmed(uS, delta, dt, tMs) {
-      const thresh = ARM_THRESH_K * noiseScale;
+      // decaying accumulator: a slow, gradual fall builds this up over several
+      // seconds even though no single frame's delta clears an instantaneous
+      // threshold. Jitter decays away between frames instead of accumulating,
+      // since `decay` pulls it back toward zero every tick regardless of sign.
+      const decay = Math.exp(-dt / ACCUM_TAU_S);
+      declineAccum = declineAccum * decay + Math.max(0, -delta);
 
-      if (delta < -thresh) {
-        debounceCount++;
-      } else {
-        debounceCount = 0;
+      const accumThresh = ACCUM_THRESH_K * noiseScale;
+      const overThresh = declineAccum > accumThresh;
+
+      if (!overThresh) {
         baseline += (uS - baseline) * Math.min(dt / BASELINE_TAU_S, 1);
 
         // only feed the noise estimator genuine back-and-forth jitter, not
@@ -316,16 +326,16 @@
         }
       }
 
-      if (debounceCount >= DEBOUNCE_FRAMES) {
+      if (overThresh) {
         preBaseline = baseline;
         tStart = tMs / 1000;
         peakUS = uS;
         peakT = 0;
         settleCount = 0;
-        debounceCount = 0;
+        declineAccum = 0;
         dexState = "FALLING";
         setDexStateDisplay(dexState);
-        log("transition", { from: "ARMED", to: "FALLING", baseline, noiseScale, thresh });
+        log("transition", { from: "ARMED", to: "FALLING", baseline, noiseScale, accumThresh });
       }
       return null;
     }
